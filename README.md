@@ -27,7 +27,7 @@ Go version>=1.13
 
 ### Installation
 ```shell
-export GOPRIVATE=git.100tal.com && export GO111MODULE=on && go get -u github.com/gs02048/micro/tool/micro
+export GOPRIVATE=github.com && export GO111MODULE=on && go get -u github.com/gs02048/micro/tool/micro
 cd $GOPATH/src
 micro new micro-demo
 ```
