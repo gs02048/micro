@@ -1,0 +1,91 @@
+package di
+
+import (
+	"context"
+	"time"
+	"os"
+    "strings"
+
+	"{{.ModPrefix}}{{.Name}}/internal/service"
+
+	"github.com/gs02048/micro/pkg/log"
+	bm "github.com/gs02048/micro/pkg/net/http/blademaster"
+	"github.com/gs02048/micro/pkg/net/rpc/warden"
+	pb "github.com/gs02048/api/demo"
+    "github.com/gs02048/micro/pkg/naming/etcd"
+    "github.com/gs02048/micro/pkg/conf/paladin"
+    "github.com/gs02048/micro/pkg/conf/env"
+    "github.com/gs02048/micro/pkg/naming"
+    "github.com/gs02048/micro/pkg/net/ip"
+)
+
+//go:generate micro tool wire
+type App struct {
+	svc *service.Service
+	http *bm.Engine
+	grpc *warden.Server
+}
+
+func NewApp(svc *service.Service, h *bm.Engine, g *warden.Server) (app *App, closeFunc func(), err error){
+	app = &App{
+		svc: svc,
+		http: h,
+		grpc: g,
+	}
+	//服务注册
+    var (
+    	cfg warden.ServerConfig
+    	ct paladin.TOML
+    )
+    if err = paladin.Get("grpc.toml").Unmarshal(&ct); err != nil {
+    	return
+    }
+    if err = ct.Get("Server").UnmarshalTOML(&cfg); err != nil {
+    	return
+    }
+    addrInfo := strings.Split(cfg.Addr,":")
+    var port string
+    if len(addrInfo) < 2{
+    	port = "9000"
+    }else{
+    	port = addrInfo[1]
+    }
+    registryCancel := registry(pb.AppID,port)
+
+	closeFunc = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		registryCancel()
+		if err := g.Shutdown(ctx); err != nil {
+			log.Error("grpcSrv.Shutdown error(%v)", err)
+		}
+		if err := h.Shutdown(ctx); err != nil {
+			log.Error("httpSrv.Shutdown error(%v)", err)
+		}
+		cancel()
+	}
+	return
+}
+
+func registry(appid,port string)(cancelFunc context.CancelFunc){
+	localip := ip.InternalIP() // NOTE: 必须拿到您实例节点的真实IP，
+	hn, _ := os.Hostname()
+	dis,err := etcd.New(nil)
+	if err != nil{
+		panic(err)
+	}
+	ins := &naming.Instance{
+		Region:env.Region,
+		Zone:     env.Zone,
+		Env:      env.DeployEnv,
+		AppID:    appid,
+		Hostname: hn,
+		Addrs: []string{
+			"grpc://" + localip + ":" + port,
+		},
+	}
+	cancel, err := dis.Register(context.Background(), ins)
+	if err != nil {
+		panic(err)
+	}
+	return cancel
+}
